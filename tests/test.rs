@@ -1,11 +1,12 @@
 use bravo_rwlock_rs::*;
+use std::sync::atomic::Ordering::Acquire;
 
 const BILLION: usize = 1000000000;
 const N: usize = 9;
-const NR_ENTIES: usize = 4096;
 
 #[test]
 fn read_lock() {
+    env_logger::init();
     let lock = BravoRWlock::new(1);
     let r = lock.read().and_then(|r| {
         println!("{}", r);
@@ -14,9 +15,11 @@ fn read_lock() {
     });
     assert_eq!(r, Ok(()));
 }
+
 #[test]
 fn write_lock() {
-    let lock = BravoRWlock::new(1);
+    env_logger::init();
+    let mut lock = BravoRWlock::new(1);
     let _w = lock.write().and_then(|mut w| {
         *w += 1;
         Ok(())
@@ -28,9 +31,11 @@ fn write_lock() {
         r.try_sync()
     });
 }
+
 #[test]
 #[should_panic]
 fn read_while_write() {
+    env_logger::init();
     let lock = BravoRWlock::new(1);
     let _w = lock.write().unwrap();
     // will fail due to its blocked
@@ -39,6 +44,7 @@ fn read_while_write() {
 
 #[test]
 fn lots_thread() {
+    env_logger::init();
     static mut lock: Option<BravoRWlock<i32>> = None;
     unsafe { lock = Some(BravoRWlock::from(0)) };
     let add_10000 = move || {

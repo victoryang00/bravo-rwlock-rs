@@ -8,10 +8,10 @@ authors = ["Yiwei Yang <yangyw@shanghaitech.edu.cn>"]
 
 [dependencies]
 log = "0.4.14"
+env_logger = "^0"
 seahash = "4.1.0"
-smallvec = "1.6.1"
-crossbeam-utils = "0.8.5"
-crossbeam-epoch = "0.9.5"
+coarsetime = "^0"
+gettid = "^0"
 num_cpus = "1.13.0"
 libc = "0.2.101"
 
