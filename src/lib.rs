@@ -1,4 +1,5 @@
 #![feature(core_intrinsics)]
+#![feature(new_uninit)]
 
 use libc::c_char;
 use std::cmp::{max, min};
@@ -19,6 +20,7 @@ use std::time::Duration;
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::Ordering::{Release, Relaxed};
 use std::fmt::{Debug, Display};
+use std::borrow::{BorrowMut, Borrow};
 
 const NR_ENTIES: usize = 4096;
 
@@ -55,43 +57,42 @@ pub struct BravoRWlockWriteGuard<'a, T: ?Sized + 'a + Default> {
 }
 
 
-unsafe impl<T: ?Sized + Sync> Sync for BravoRWlockWriteGuard<'_, T> {}
-impl<T: ?Sized> Deref for BravoRWlockWriteGuard<'_, T> {
+unsafe impl<T: ?Sized + Sync + Default> Sync for BravoRWlockWriteGuard<'_, T> {}
+
+impl<T: ?Sized + Default> Deref for BravoRWlockWriteGuard<'_, T> {
     type Target = T;
     #[inline(always)]
     fn deref(&self) -> &Self::Target {
-        unsafe { &*self.lock.data.get() }
-    }
-}
-impl<T: ?Sized> DerefMut for BravoRWlockWriteGuard<'_, T> {
-    #[inline(always)]
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        unsafe { &mut *self.lock.data.get() }
-    }
-}
-impl<T: ?Sized> Drop for BravoRWlockWriteGuard<'_, T> {
-    #[inline(always)]
-    fn drop(&mut self) {
-        if std::thread::panicking() {
-            self.lock.poisoned.fetch_or(true, Release);
-        } else {
-            self.lock.version_lock_outdate.fetch_add(0b10, Release);
+        unsafe {
+            &self.lock.underlying.into_inner().unwrap()
         }
     }
 }
-impl<T: Debug> Debug for BravoRWlockWriteGuard<'_, T> {
+
+impl<T: ?Sized + Default> DerefMut for BravoRWlockWriteGuard<'_, T> {
+    #[inline(always)]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe {
+            &mut self.lock.underlying.into_inner().unwrap()
+        }
+    }
+}
+
+impl<T: ?Sized + Default> Drop for BravoRWlockWriteGuard<'_, T> {
+    #[inline(always)]
+    fn drop(&mut self) {}
+}
+
+impl<T: Debug + Default> Debug for BravoRWlockWriteGuard<'_, T> {
     #[inline(always)]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("BravoRWlockWriteGuard")
-            .field(
-                "version",
-                &(self.lock.version_lock_outdate.load(Relaxed) >> 2),
-            )
             .field("data", self.deref())
             .finish()
     }
 }
-impl<T: Debug + Display> Display for BravoRWlockWriteGuard<'_, T> {
+
+impl<T: Debug + Display + Default> Display for BravoRWlockWriteGuard<'_, T> {
     #[inline(always)]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_fmt(format_args!(
@@ -100,10 +101,11 @@ impl<T: Debug + Display> Display for BravoRWlockWriteGuard<'_, T> {
         ))
     }
 }
-impl<'a, T: ?Sized> BravoRWlockWriteGuard<'a, T> {
+
+impl<'a, T: ?Sized + Default> BravoRWlockWriteGuard<'a, T> {
     #[inline(always)]
-    pub fn new(lock: &'a OptimisticLockCoupling<T>) -> Self {
-        Self { lock }
+    pub fn new(lock: &'a BravoRWlockWriteGuard<T>) -> Self {
+        Self { lock: lock.lock }
     }
 }
 
@@ -111,26 +113,25 @@ pub struct BravoRWlockReadGuard<'a, T: ?Sized + 'a + Default> {
     lock: &'a BravoRWlock<T>,
 }
 
-impl<T: Default> BravoRWlock<T> {
-    #[inline(always)]
-    pub fn new(t: T) -> Self {
-        let s = RwLock::new(t);
-        Self {
-            rbias: false,
-            underlying: s,
-            inhibit_until: 0,
-        }
-    }
-}
 
-impl<T: ?Sized + Default> Default for BravoRWlock<T> {
+impl<T: ?Sized + Default + PartialEq> Default for BravoRWlock<T> {
     #[inline(always)]
     fn default() -> Self {
         Self::new(Default::default())
     }
 }
 
-impl<T: Sized + Default> From<T> for BravoRWlock<T> {
+impl<T: ?Sized + Default + PartialEq> PartialEq for BravoRWlock<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.underlying.into_inner().borrow().unwrap() == other.underlying.into_inner().borrow().unwrap()
+    }
+
+    fn ne(&self, other: &Self) -> bool {
+        self.underlying.into_inner().borrow().unwrap() != other.underlying.into_inner().borrow().unwrap()
+    }
+}
+
+impl<T: Sized + Default + PartialEq> From<T> for BravoRWlock<T> {
     #[inline(always)]
     fn from(t: T) -> Self {
         Self::new(t)
@@ -141,10 +142,22 @@ unsafe impl<T: Default + ?Sized> Sync for BravoRWlock<T> {}
 
 unsafe impl<T: Default + ?Sized> Send for BravoRWlock<T> {}
 
+fn get_visible_reader<T: ?Sized + Default>() -> [BravoRWlock<T>; 4096] {
+    [BravoRWlock { rbias: false, underlying: RwLock::default(), inhibit_until: 0 }; NR_ENTIES]
+}
 
-static VISIBLE_READERS: [BravoRWlock<i32>; NR_ENTIES] = [BravoRWlock { rbias: false, underlying: RwLock::new(0), inhibit_until: 0 }; NR_ENTIES];
+// static VISIBLE_READERS: [BravoRWlock<T>; NR_ENTIES] = [BravoRWlock { rbias: false, underlying: RwLock::new(0), inhibit_until: 0 }; NR_ENTIES];
 
-impl<T: ?Sized + Default> BravoRWlock<T> {
+impl<T: ?Sized + Default + PartialEq> BravoRWlock<T> {
+    #[inline(always)]
+    pub fn new(t: T) -> Self {
+        let s = RwLock::new(t);
+        Self {
+            rbias: false,
+            underlying: s,
+            inhibit_until: 0,
+        }
+    }
     #[inline]
     pub fn hash(&mut self) -> u32 {
         let a: u64 = gettid();
@@ -153,16 +166,22 @@ impl<T: ?Sized + Default> BravoRWlock<T> {
     // make self destroy
     // usually used when the container grows and this pointer point to this structure is replaced
     #[inline]
-    pub fn destroy(&self) {}
+    pub fn destroy(&self) {
+        unimplemented!()
+    }
 
     // try to aquire the lock but only internal use
     #[inline]
     fn try_write(&mut self) -> BravoRWlockResult<u64> {
-        let mut s = self.underlying.try_write().unwrap();
+        self.underlying.borrow_mut().try_write().unwrap();
         if self.rbias {
             self.revocate()
         }
         Ok(0)
+    }
+    #[inline]
+    fn try_read(&mut self) -> BravoRWlockResult<u64> {
+        unimplemented!()
     }
     // I suggest you redo the hole function when error occurs
     #[inline]
@@ -173,12 +192,12 @@ impl<T: ?Sized + Default> BravoRWlock<T> {
     // get your RAII write guard
     #[inline]
     pub fn write(&mut self) -> BravoRWlockResult<BravoRWlockWriteGuard<'_, T>> {
-        let mut s = self.underlying.write();
+        let mut s = self.underlying.borrow_mut().write();
         if self.rbias {
             self.revocate()
         }
         match s {
-            Ok(_) => Ok(BravoRWlockWriteGuard::new(self)),
+            Ok(_) => Ok(BravoRWlockWriteGuard { lock: self }),
             Err(_) => Err(BravoRWlockErrorType::RWLockWLockFail),
         }
     }
@@ -187,7 +206,7 @@ impl<T: ?Sized + Default> BravoRWlock<T> {
         let ts = Instant::recent();
         self.rbias = false;
         for i in 0..NR_ENTIES {
-            while VISIBLE_READERS[i] == self {
+            while get_visible_reader::<T>()[i].borrow_mut() == self {
                 sleep(Duration::from_millis(1));
             }
         };
