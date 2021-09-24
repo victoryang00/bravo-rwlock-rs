@@ -9,7 +9,7 @@ use std::num::*;
 use std::sync::atomic::{fence, AtomicUsize, AtomicBool};
 use std::sync::{RwLock, RwLockWriteGuard, LockResult};
 use std::thread::sleep;
-use std::ptr::copy_nonoverlapping;
+use lazy_static::lazy_static;
 
 extern crate coarsetime;
 
@@ -95,7 +95,7 @@ impl<T: Debug + Display + Default> Display for BravoRWlockWriteGuard<'_, T> {
 impl<'a, T: ?Sized + Default> BravoRWlockWriteGuard<'a, T> {
     #[inline(always)]
     pub fn new(lock: &'a BravoRWlockWriteGuard<T>) -> Self {
-        Self { lock: lock.lock ,data: lock.data}
+        Self { lock: lock.lock, data: lock.data }
     }
 }
 
@@ -103,6 +103,15 @@ pub struct BravoRWlockReadGuard<'a, T: ?Sized + 'a + Default> {
     lock: &'a BravoRWlock<T>,
 }
 
+impl<T: Debug + Display + Default> Display for BravoRWlockReadGuard<'_, T> {
+    #[inline(always)]
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!(
+            "BravoRWlockReadGuard  {}",
+            self.deref()
+        ))
+    }
+}
 
 impl<T: ?Sized + Default + PartialEq> Default for BravoRWlock<T> {
     #[inline(always)]
@@ -132,10 +141,9 @@ unsafe impl<T: Default + ?Sized> Sync for BravoRWlock<T> {}
 
 unsafe impl<T: Default + ?Sized> Send for BravoRWlock<T> {}
 
-fn get_visible_reader<T: ?Sized + Default>() -> [BravoRWlock<T>; 4096] {
-    [BravoRWlock { rbias: false, underlying: RwLock::default(), inhibit_until: 0 }; NR_ENTIES]
+fn get_visible_reader<T: ?Sized + Default>() -> Vec<BravoRWlock<T>> {
+    std::iter::repeat_with(|| BravoRWlock { rbias: false, underlying: RwLock::default(), inhibit_until: 0 }).take(NR_ENTIES).collect()
 }
-
 // static VISIBLE_READERS: [BravoRWlock<T>; NR_ENTIES] = [BravoRWlock { rbias: false, underlying: RwLock::new(0), inhibit_until: 0 }; NR_ENTIES];
 
 impl<T: ?Sized + Default + PartialEq> BravoRWlock<T> {

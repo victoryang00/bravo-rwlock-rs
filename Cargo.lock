@@ -28,6 +28,7 @@ version = "0.1.0"
 dependencies = [
  "coarsetime",
  "env_logger",
+ "lazy_static",
  "libc",
  "log",
  "num_cpus",
