@@ -11,7 +11,6 @@ log = "0.4.14"
 env_logger = "^0"
 seahash = "4.1.0"
 coarsetime = "^0"
-gettid = "^0"
 num_cpus = "1.13.0"
 libc = "0.2.101"
 

@@ -7,7 +7,7 @@ const N: usize = 9;
 #[test]
 fn read_lock() {
     env_logger::init();
-    let lock = BravoRWlock::new(1);
+    let lock = BravoRWlock::new(Box::new(1));
     let r = lock.read().and_then(|r| {
         println!("{}", r);
         assert_eq!(*r, 1);
@@ -19,7 +19,7 @@ fn read_lock() {
 #[test]
 fn write_lock() {
     env_logger::init();
-    let mut lock = BravoRWlock::new(1);
+    let mut lock = BravoRWlock::new(Box::new(1));
     let _w = lock.write().and_then(|mut w| {
         *w += 1;
         Ok(())
@@ -36,7 +36,7 @@ fn write_lock() {
 #[should_panic]
 fn read_while_write() {
     env_logger::init();
-    let lock = BravoRWlock::new(1);
+    let lock = BravoRWlock::new(Box::new(1));
     let _w = lock.write().unwrap();
     // will fail due to its blocked
     let _r = lock.read().unwrap();

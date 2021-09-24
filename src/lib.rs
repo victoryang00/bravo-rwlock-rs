@@ -1,17 +1,15 @@
 #![feature(core_intrinsics)]
 #![feature(new_uninit)]
+#![feature(thread_id_value)]
 
 use libc::c_char;
 use std::cmp::{max, min};
 use std::mem;
 use std::num::*;
-use std::sync::atomic::{fence, AtomicUsize};
+use std::sync::atomic::{fence, AtomicUsize, AtomicBool};
 use std::sync::{RwLock, RwLockWriteGuard, LockResult};
 use std::thread::sleep;
-
-extern crate gettid;
-
-use gettid::gettid;
+use std::ptr::copy_nonoverlapping;
 
 extern crate coarsetime;
 
@@ -21,15 +19,15 @@ use std::ops::{Deref, DerefMut};
 use std::sync::atomic::Ordering::{Release, Relaxed};
 use std::fmt::{Debug, Display};
 use std::borrow::{BorrowMut, Borrow};
+use std::marker::PhantomData;
 
 const NR_ENTIES: usize = 4096;
 
 pub fn mix32(mut z: u64) -> u32 {
-    z = (z ^ (z >> 33)) * 0xff51afd7ed558ccdu64;
-    z = (z ^ (z >> 33)) * 0xc4ceb9fe1a85ec53u64;
+    z = (z.borrow() ^ (z >> 33)) * 0xff51afd7ed558ccdu64;
+    z = (z.borrow() ^ (z >> 33)) * 0xc4ceb9fe1a85ec53u64;
     return (z >> 32) as u32;
 }
-
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum BravoRWlockErrorType {
@@ -54,6 +52,7 @@ pub struct BravoRWlock<T: Default + ?Sized> {
 // release the lock on drop
 pub struct BravoRWlockWriteGuard<'a, T: ?Sized + 'a + Default> {
     lock: &'a BravoRWlock<T>,
+    data: &'a T,
 }
 
 
@@ -63,18 +62,7 @@ impl<T: ?Sized + Default> Deref for BravoRWlockWriteGuard<'_, T> {
     type Target = T;
     #[inline(always)]
     fn deref(&self) -> &Self::Target {
-        unsafe {
-            &self.lock.underlying.into_inner().unwrap()
-        }
-    }
-}
-
-impl<T: ?Sized + Default> DerefMut for BravoRWlockWriteGuard<'_, T> {
-    #[inline(always)]
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        unsafe {
-            &mut self.lock.underlying.into_inner().unwrap()
-        }
+        unsafe { &*self.data }
     }
 }
 
@@ -88,6 +76,8 @@ impl<T: Debug + Default> Debug for BravoRWlockWriteGuard<'_, T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("BravoRWlockWriteGuard")
             .field("data", self.deref())
+            .field("poison", self.deref())
+            .field("marker", self.deref())
             .finish()
     }
 }
@@ -105,7 +95,7 @@ impl<T: Debug + Display + Default> Display for BravoRWlockWriteGuard<'_, T> {
 impl<'a, T: ?Sized + Default> BravoRWlockWriteGuard<'a, T> {
     #[inline(always)]
     pub fn new(lock: &'a BravoRWlockWriteGuard<T>) -> Self {
-        Self { lock: lock.lock }
+        Self { lock: lock.lock ,data: lock.data}
     }
 }
 
@@ -123,11 +113,11 @@ impl<T: ?Sized + Default + PartialEq> Default for BravoRWlock<T> {
 
 impl<T: ?Sized + Default + PartialEq> PartialEq for BravoRWlock<T> {
     fn eq(&self, other: &Self) -> bool {
-        self.underlying.into_inner().borrow().unwrap() == other.underlying.into_inner().borrow().unwrap()
+        *self.underlying.read().unwrap() == *other.underlying.read().unwrap()
     }
 
     fn ne(&self, other: &Self) -> bool {
-        self.underlying.into_inner().borrow().unwrap() != other.underlying.into_inner().borrow().unwrap()
+        *self.underlying.read().unwrap() != *other.underlying.read().unwrap()
     }
 }
 
@@ -160,7 +150,7 @@ impl<T: ?Sized + Default + PartialEq> BravoRWlock<T> {
     }
     #[inline]
     pub fn hash(&mut self) -> u32 {
-        let a: u64 = gettid();
+        let a: u64 = std::thread::current().id().as_u64().into();
         mix32(a % (NR_ENTIES as u64))
     }
     // make self destroy
@@ -192,14 +182,7 @@ impl<T: ?Sized + Default + PartialEq> BravoRWlock<T> {
     // get your RAII write guard
     #[inline]
     pub fn write(&mut self) -> BravoRWlockResult<BravoRWlockWriteGuard<'_, T>> {
-        let mut s = self.underlying.borrow_mut().write();
-        if self.rbias {
-            self.revocate()
-        }
-        match s {
-            Ok(_) => Ok(BravoRWlockWriteGuard { lock: self }),
-            Err(_) => Err(BravoRWlockErrorType::RWLockWLockFail),
-        }
+        unimplemented!()
     }
     #[inline]
     pub fn revocate(&mut self) {
